@@ -1,9 +1,35 @@
 """Experimental local alignment. No media leaves this machine."""
-import os, re, subprocess, tempfile, unicodedata, difflib, json
+import os, re, subprocess, tempfile, unicodedata, difflib, json, hashlib
 from pathlib import Path
 import numpy as np
 from scipy import signal
 RATE=8000; HOP=400
+CACHE=Path.home()/ 'Library' / 'Caches' / 'AvidTranscriptSync'
+def quiet(*args): pass
+def cache_key(path, kind):
+    h=hashlib.sha256()
+    with open(path,'rb') as f:
+        for block in iter(lambda:f.read(1024*1024),b''):h.update(block)
+    return CACHE/(kind+'-'+h.hexdigest())
+def cached_features(path, progress):
+    progress('Calcolo impronta file per cache')
+    key=cache_key(path,'features-v1').with_suffix('.npy')
+    if key.exists():
+        try:
+            value=np.load(key,allow_pickle=False);progress('Impronta recuperata dalla cache');return value
+        except (OSError,ValueError):pass
+    progress('Decodifica audio FFmpeg')
+    x=audio(path)
+    progress('Estrazione impronta acustica')
+    value=features(x)
+    try:
+        CACHE.mkdir(parents=True,exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=CACHE,delete=False) as f:
+            np.save(f,value);tmp=f.name
+        os.replace(tmp,key)
+    except OSError:pass
+    return value
+
 
 def audio(path):
     return np.frombuffer(subprocess.check_output(['ffmpeg','-nostdin','-v','error','-i',str(path),'-vn','-ac','1','-ar',str(RATE),'-f','f32le','-']),dtype='<f4')
@@ -61,15 +87,37 @@ def match_words(words,clips):
             results.append((score,ci,pairs,positions,ids,target))
     return sorted(results,key=lambda x:-x[0])
 
-def recognize(path, model):
-    segs,_=model.transcribe(str(path),language='it',word_timestamps=True,beam_size=5,vad_filter=True,condition_on_previous_text=False)
-    return [dict(word=w.word,start=w.start,end=w.end,probability=w.probability) for s in segs for w in (s.words or [])]
+def recognize(path, model, progress=quiet, model_name='small'):
+    key=cache_key(path,'words-v1-'+model_name).with_suffix('.json')
+    if key.exists():
+        try:
+            value=json.loads(key.read_text());progress('Trascrizione recuperata dalla cache',1,1);return value
+        except (OSError,ValueError):pass
+    progress('Whisper: decodifica e rilevamento voce')
+    segs,info=model.transcribe(str(path),language='it',word_timestamps=True,beam_size=5,vad_filter=True,condition_on_previous_text=False)
+    words=[]
+    for s in segs:
+        words.extend(dict(word=w.word,start=w.start,end=w.end,probability=w.probability) for w in (s.words or []))
+        progress('Whisper: trascrizione',s.end,info.duration)
+    try:
+        CACHE.mkdir(parents=True,exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w',dir=CACHE,delete=False) as f:
+            json.dump(words,f);tmp=f.name
+        os.replace(tmp,key)
+    except OSError:pass
+    return words
 
-def analyze(project, queries, refs, model=None):
-    clips=project['clips']; references={i:features(audio(p)) for i,p in refs.items()}; report=[]; proposals=[]
-    for name,path in queries:
-        x=audio(path); f=features(x); matches=[]; size=240; stride=200
-        for start in range(0,max(0,len(f)-size+1),stride):
+def analyze(project, queries, refs, model=None, progress=quiet, model_name='small'):
+    clips=project['clips']; references={}; report=[]; proposals=[]
+    for n,(i,p) in enumerate(refs.items(),1):
+        progress(f'Riferimento {n}/{len(refs)} (cassetta {i+1})')
+        references[i]=cached_features(p,progress)
+    for n,(name,path) in enumerate(queries,1):
+        progress(f'Clip {n}/{len(queries)}: {name}')
+        f=cached_features(path,progress) if references else None; matches=[]; size=240; stride=200
+        windows=range(0,max(0,len(f)-size+1),stride) if references else range(0)
+        for k,start in enumerate(windows,1):
+            progress('Confronto acustico',k-1,len(windows))
             candidates=[]
             for ci,r in references.items():
                 hit=locate(f[start:start+size],r)
@@ -80,8 +128,9 @@ def analyze(project, queries, refs, model=None):
             if s>=.48 and s-runner>=.07:matches.append(dict(audioStart=start*.05,audioEnd=(start+size)*.05,clip=ci,videoStart=t,score=round(s,3)))
         entry=dict(file=name,matches=matches,textMatches=[]);report.append(entry)
         if model is None:continue
-        words=recognize(path,model)
+        words=recognize(path,model,progress,model_name)
         for start in range(0,len(words),80):
+            progress('Allineamento testo',start,len(words))
             batch=words[start:start+80]; ranked=match_words(batch,clips)
             if not ranked:continue
             score,ci,pairs,pos,ids,target=ranked[0]
@@ -102,5 +151,6 @@ def analyze(project, queries, refs, model=None):
                 if not maps:continue
                 m=max(maps,key=lambda m:m['score']);offset=m['videoStart']-m['audioStart'];
                 proposals.append(dict(clip=ci,cue=cue,text=original['text'],oldIn=original['in'],oldOut=original['out'],start=a+offset,end=b+offset,score=round(min(score,m['score']),3),file=name))
+    progress('Risultati pronti',1,1)
     return dict(report=report,proposals=proposals)
 
