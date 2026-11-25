@@ -52,3 +52,17 @@ Creare prima il repository vuoto su GitHub. Settings > Pages > Deploy from a bra
 - Clic singolo seleziona; doppio clic nell'elenco o sulla timeline cerca l'IN e centra la timeline.
 - La selezione aggiorna solo il pannello e le due righe interessate; canvas a larghezza viewport e palette precalcolata. Rimossa la limitazione a 32.000 pixel della timeline.
 - Compatibile con progetti JSON v2. Test motore: `node test.mjs`.
+
+## v0.4 – Allineamento audio sperimentale (locale)
+
+GitHub Pages conserva l'editor, ma il motore sperimentale richiede Python e FFmpeg sul Mac. Aprire il progetto nella versione locale:
+
+```bash
+brew install ffmpeg python@3.12
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-align.txt
+python align.py
+```
+
+Aprire http://127.0.0.1:8765 e caricare il JSON originale. Nella sezione Allineamento audio selezionare più clip sconosciute; associare i riferimenti video/audio completi alle cassette (il tempo zero deve coincidere col progetto). Il confronto usa finestre sovrapposte di circa 12 secondi e correlazione delle variazioni di energia spettrale. La modalità testo usa faster-whisper in italiano con timestamp parola e ricerca per trigrammi più allineamento di sequenze. Non è un forced aligner fonetico CTC: è una prima soluzione ibrida, conservativa. Senza riferimento video vengono mostrati candidati testuali ma non applicati timecode. Le proposte sono filtrate per corrispondenza non ambigua, copertura del testo e assenza di conflitti con i sottotitoli adiacenti. Ancoraggi e blocchi non vengono modificati. Gli indici sono euristici, non probabilità calibrate. Modello scaricato al primo uso; elaborazione CPU locale. Non caricare media nel repository. Il primo test va fatto su estratti brevi; tagli, velocità diverse e audio degradato possono produrre mancati match. L'undo ripristina lo snapshot precedente all'applicazione; salvare prima di procedere. 
