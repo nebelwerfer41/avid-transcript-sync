@@ -4,6 +4,9 @@ from flask import Flask, request, jsonify, send_from_directory
 from alignment_core import analyze
 ROOT=Path(__file__).resolve().parent
 app=Flask(__name__,static_folder=None)
+# Large transcript JSON fields; media uploads are spooled to disk by Werkzeug.
+app.config['MAX_FORM_MEMORY_SIZE']=64*1024*1024
+app.config['MAX_CONTENT_LENGTH']=None
 @app.get('/')
 def home():return send_from_directory(ROOT,'index.html')
 @app.get('/<path:name>')
@@ -30,5 +33,5 @@ def run():
                 from faster_whisper import WhisperModel
                 model=WhisperModel(request.form.get('model','small'),device='cpu',compute_type='int8')
             return jsonify(analyze(p,queries,refs,model))
-    except Exception as e:return jsonify(error=str(e)),400
+    except Exception as e:return jsonify(error=str(e)),getattr(e,'code',400)
 if __name__=='__main__':app.run(host='127.0.0.1',port=8765,debug=False)
