@@ -46,3 +46,9 @@ Creare prima il repository vuoto su GitHub. Settings > Pages > Deploy from a bra
 - Colori per parlante, conservati nel progetto JSON; si applicano a timeline, elenco e anteprima, non ai formati Avid testuali.
 - Normalizzazione conservativa OCR dei nomi ALL, DI MAURO, LINDA, LS, ORM, spazi e righe PDF; pulsante Pulisci testo OCR. Il testo prima della prima intestazione videocassetta riconosciuta non entra nei sottotitoli.
 - Il PDF può contenere errori OCR anche nel corpo delle battute: la pulizia non è un nuovo OCR e non li corregge automaticamente. Verificare la trascrizione prima della generazione.
+
+## v0.3
+- Trasporto virtuale senza media: Play/Pausa, loop, velocità, frame, IN/OUT, ancoraggi e anteprima.
+- Clic singolo seleziona; doppio clic nell'elenco o sulla timeline cerca l'IN e centra la timeline.
+- La selezione aggiorna solo il pannello e le due righe interessate; canvas a larghezza viewport e palette precalcolata. Rimossa la limitazione a 32.000 pixel della timeline.
+- Compatibile con progetti JSON v2. Test motore: `node test.mjs`.
