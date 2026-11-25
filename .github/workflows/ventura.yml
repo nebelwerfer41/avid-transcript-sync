@@ -1,0 +1,130 @@
+name: Ventura Intel portable build
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ventura.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            /*
+            !/.venv/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Intel wheels
+        run: |
+          python -c 'import platform; assert platform.machine()=="x86_64"'
+          python -m pip install --only-binary=:all: flask==3.1.0 numpy==1.26.4 scipy==1.13.1 faster-whisper==1.1.1 ctranslate2==4.4.0 onnxruntime==1.20.1 av==14.2.0 tokenizers==0.21.1 pyinstaller==6.12.0 imageio-ffmpeg==0.6.0
+          node test.mjs
+          python -m unittest test_align
+      - name: Stage offline assets
+        run: |
+          mkdir -p package/vendor package/models
+          cp align.py alignment_core.py index.html app.js engine.mjs style.css package/
+          npm install --no-save pdfjs-dist@4.10.38 mammoth@1.8.0
+          cp node_modules/pdfjs-dist/build/pdf.min.mjs node_modules/pdfjs-dist/build/pdf.worker.min.mjs package/vendor/
+          cp node_modules/mammoth/mammoth.browser.min.js package/vendor/
+          cp -R node_modules/pdfjs-dist/cmaps node_modules/pdfjs-dist/standard_fonts package/vendor/
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('package/align.py')
+          s=p.read_text().replace('import json, tempfile','import json, tempfile, os, sys')
+          s=s.replace('app=Flask(', 'BASE=Path(sys.executable).parent if getattr(sys,"frozen",False) else ROOT\nos.environ["PATH"]=str(BASE/"bin")+os.pathsep+os.environ["PATH"]\napp=Flask(')
+          s=s.replace("if name not in", "if not name.startswith('vendor/') and name not in")
+          s=s.replace("model=WhisperModel(request.form.get('model','small'),", "model_name=request.form.get('model','small')\n                if model_name not in ('small','medium','large-v3'):raise ValueError('Modello non valido')\n                model_path=BASE/'models'/model_name\n                if not model_path.is_dir():raise ValueError('Modello non installato: '+model_name)\n                model=WhisperModel(str(model_path),")
+          p.write_text(s)
+          p=Path('package/app.js')
+          s=p.read_text().replace('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/', './vendor/').replace("await import('https://cdn.jsdelivr.net/npm/mammoth@1.8.0/+esm')","window.mammoth").replace('data:await f.arrayBuffer()', "data:await f.arrayBuffer(),cMapUrl:'./vendor/cmaps/',cMapPacked:true,standardFontDataUrl:'./vendor/standard_fonts/'")
+          p.write_text(s)
+          p=Path('package/index.html')
+          s=p.read_text().replace('<script type="module"', '<script src="vendor/mammoth.browser.min.js"></script><script type="module"').replace('<option value="medium">','<option value="medium" disabled>').replace('<option value="large-v3">','<option value="large-v3" disabled>')
+          p.write_text(s)
+          from faster_whisper.utils import download_model
+          download_model('small',output_dir='package/models/small')
+          PY
+      - name: Freeze application
+        run: |
+          cd package
+          python -m PyInstaller --noconfirm --clean --onedir --name AvidTranscriptSync --target-arch x86_64 --collect-all faster_whisper --collect-all ctranslate2 --collect-all av --collect-all tokenizers --collect-all onnxruntime --add-data index.html:. --add-data app.js:. --add-data engine.mjs:. --add-data style.css:. --add-data vendor:vendor align.py
+          cd dist/AvidTranscriptSync
+          mkdir -p bin
+          cp "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" bin/ffmpeg
+          chmod +x bin/ffmpeg
+          mv ../../models .
+          cat > Avvia.command <<'EOF'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          ./AvidTranscriptSync &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in {1..60}; do
+            kill -0 "$pid" 2>/dev/null || exit 1
+            if /usr/bin/curl -fsS http://127.0.0.1:8765/alignment/health >/dev/null; then
+              open http://127.0.0.1:8765
+              wait "$pid"
+              exit $?
+            fi
+            sleep 1
+          done
+          exit 1
+          EOF
+          chmod +x Avvia.command
+      - name: Audit native deployment targets
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, re
+          root=pathlib.Path('package/dist/AvidTranscriptSync')
+          bad=[]
+          for p in root.rglob('*'):
+              if p.is_symlink() or not p.is_file(): continue
+              desc=subprocess.check_output(['file','-b',str(p)],text=True)
+              if 'Mach-O' not in desc: continue
+              if 'x86_64' not in desc: bad.append((str(p),'no x86_64')); continue
+              s=subprocess.check_output(['otool','-arch','x86_64','-l',str(p)],text=True)
+              versions=re.findall(r'cmd LC_BUILD_VERSION\s+cmdsize \d+\s+platform \S+\s+minos ([\d.]+)',s)+re.findall(r'cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version ([\d.]+)',s)
+              if not versions: bad.append((str(p),'missing minimum OS'))
+              for v in versions:
+                  if tuple(map(int,v.split('.')))+(0,)*(3-len(v.split('.')))>(13,6,3): bad.append((str(p),v))
+          print('Incompatible:',bad)
+          if bad: raise SystemExit(1)
+          PY
+      - name: Smoke test frozen server and audio decoder
+        run: |
+          cd package/dist/AvidTranscriptSync
+          bin/ffmpeg -version
+          ./AvidTranscriptSync >server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" || true; cat server.log; rm -f server.log' EXIT
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8765/alignment/health; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8765/ > /dev/null
+          curl -fsS http://127.0.0.1:8765/vendor/pdf.min.mjs > /dev/null
+          bin/ffmpeg -v error -f lavfi -i sine=frequency=440:duration=2 -y /tmp/avid-smoke.wav
+          curl -fsS -F 'project={"clips":[],"fps":25}' -F mode=both -F model=small -F audio=@/tmp/avid-smoke.wav http://127.0.0.1:8765/alignment/run
+      - name: Archive
+        run: |
+          cd package/dist
+          ditto -c -k --keepParent AvidTranscriptSync AvidTranscriptSync-Ventura-Intel.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AvidTranscriptSync-Ventura-Intel
+          path: package/dist/AvidTranscriptSync-Ventura-Intel.zip
+          compression-level: 0
+          retention-days: 30
