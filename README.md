@@ -66,3 +66,12 @@ python align.py
 ```
 
 Aprire http://127.0.0.1:8765 e caricare il JSON originale. Nella sezione Allineamento audio selezionare più clip sconosciute; associare i riferimenti video/audio completi alle cassette (il tempo zero deve coincidere col progetto). Il confronto usa finestre sovrapposte di circa 12 secondi e correlazione delle variazioni di energia spettrale. La modalità testo usa faster-whisper in italiano con timestamp parola e ricerca per trigrammi più allineamento di sequenze. Non è un forced aligner fonetico CTC: è una prima soluzione ibrida, conservativa. Senza riferimento video vengono mostrati candidati testuali ma non applicati timecode. Le proposte sono filtrate per corrispondenza non ambigua, copertura del testo e assenza di conflitti con i sottotitoli adiacenti. Ancoraggi e blocchi non vengono modificati. Gli indici sono euristici, non probabilità calibrate. Modello scaricato al primo uso; elaborazione CPU locale. Non caricare media nel repository. Il primo test va fatto su estratti brevi; tagli, velocità diverse e audio degradato possono produrre mancati match. L'undo ripristina lo snapshot precedente all'applicazione; salvare prima di procedere. 
+
+
+## Associazione JSON Whisper (anche GitHub Pages)
+
+Aprire il progetto della trascrizione, poi **Associa trascrizioni Whisper (JSON)**. Selezionare uno o più JSON con timestamp parola (array di oggetti word/start/end, oppure words o segments[].words) e premere Analizza e associa. Non serve Python né un nuovo passaggio Whisper.
+
+Il motore normalizza il testo e cerca sequenze distintive di 4–5 parole, formando catene monotone locali con tolleranza per omissioni e inserimenti tra ancore. Le catene possono appartenere a cassette diverse. Le zone non associate non vengono interpolate; i candidati concorrenti vengono segnalati come ambigui. Non è un allineatore fonetico e può perdere passaggi molto degradati o confondere ripetizioni.
+
+La fascia turchese sopra i sottotitoli indica candidati con più ancore; quella ocra indica candidati deboli o ambigui. Aprire le ancore per controllare il testo e usare Vai alla timeline. I tempi della cassetta sono quelli correnti del progetto, eventualmente stimati: non costituiscono una calibrazione audio/video. Nessun IN/OUT, blocco o ancora originale viene cambiato. Il rapporto è esportabile separatamente e viene conservato salvando il progetto. Se si modifica la segmentazione delle battute, ripetere l'analisi. Rimuovi associazioni cancella solo il rapporto. I file restano nel browser e non vengono pubblicati.
