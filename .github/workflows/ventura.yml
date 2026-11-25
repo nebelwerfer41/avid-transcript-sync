@@ -29,7 +29,7 @@ jobs:
       - name: Install Intel wheels
         run: |
           python -c 'import platform; assert platform.machine()=="x86_64"'
-          python -m pip install --only-binary=:all: flask==3.1.0 numpy==1.26.4 scipy==1.13.1 faster-whisper==1.1.1 ctranslate2==4.4.0 onnxruntime==1.20.1 av==14.2.0 tokenizers==0.21.1 pyinstaller==6.12.0 imageio-ffmpeg==0.6.0
+          python -m pip install --only-binary=:all: flask==3.1.0 numpy==1.26.4 scipy==1.13.1 faster-whisper==1.1.1 ctranslate2==4.6.0 onnxruntime==1.20.1 av==14.2.0 tokenizers==0.21.1 pyinstaller==6.12.0 imageio-ffmpeg==0.6.0
           node test.mjs
           python -m unittest test_align
       - name: Stage offline assets
