@@ -4,6 +4,12 @@ on:
   push:
     paths:
       - '.github/workflows/ventura.yml'
+      - '*.py'
+      - '*.js'
+      - '*.mjs'
+      - '*.html'
+      - '*.css'
+      - 'requirements-align.txt'
 permissions:
   contents: read
 jobs:
@@ -46,7 +52,7 @@ jobs:
           s=p.read_text().replace('import json, tempfile','import json, tempfile, os, sys')
           s=s.replace('app=Flask(', 'BASE=Path(sys.executable).parent if getattr(sys,"frozen",False) else ROOT\nos.environ["PATH"]=str(BASE/"bin")+os.pathsep+os.environ["PATH"]\napp=Flask(')
           s=s.replace("if name not in", "if not name.startswith('vendor/') and name not in")
-          s=s.replace("model=WhisperModel(request.form.get('model','small'),", "model_name=request.form.get('model','small')\n                if model_name not in ('small','medium','large-v3'):raise ValueError('Modello non valido')\n                model_path=BASE/'models'/model_name\n                if not model_path.is_dir():raise ValueError('Modello non installato: '+model_name)\n                model=WhisperModel(str(model_path),")
+          s=s.replace("WhisperModel(request.form.get('model','small'),", "WhisperModel(str(BASE/'models'/model_name),")
           p.write_text(s)
           p=Path('package/app.js')
           s=p.read_text().replace('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/', './vendor/').replace("await import('https://cdn.jsdelivr.net/npm/mammoth@1.8.0/+esm')","window.mammoth").replace('data:await f.arrayBuffer()', "data:await f.arrayBuffer(),cMapUrl:'./vendor/cmaps/',cMapPacked:true,standardFontDataUrl:'./vendor/standard_fonts/'")
