@@ -33,6 +33,49 @@ function alignmentRefs(){const box=$('alignRefs');if(!box)return;box.replaceChil
 $('alignment').addEventListener('toggle',()=>{if($('alignment').open)alignmentRefs()});
 $('alignRefresh').onclick=alignmentRefs;
 function showAlignment(result){alignResult=result;let box=$('alignReport');box.replaceChildren();for(let r of result.report){let p=document.createElement('p');p.textContent=r.file+': '+r.matches.length+' finestre audio riconosciute, '+r.textMatches.length+' corrispondenze testuali';box.append(p);for(let m of r.matches){let d=document.createElement('div');d.textContent=`Audio ${m.audioStart.toFixed(2)}–${m.audioEnd.toFixed(2)} s → ${clips[m.clip]?.name||m.clip} @ ${m.videoStart.toFixed(2)} s · indice ${m.score}`;box.append(d)}for(let m of r.textMatches){let d=document.createElement('div');d.textContent=`Testo: ${clips[m.clip]?.name||m.clip}, sottotitoli ${m.first+1}–${m.last+1} · indice ${m.score}`;box.append(d)}}let p=document.createElement('p');p.textContent=`${result.proposals.length} proposte di timing (indici euristici, non probabilità).`;box.append(p);for(let a of result.proposals){let label=document.createElement('label'),cb=document.createElement('input');cb.type='checkbox';cb.checked=true;cb.dataset.proposal=String(result.proposals.indexOf(a));label.append(cb,document.createTextNode(` ${clips[a.clip]?.name} #${a.cue+1}: ${a.start.toFixed(2)}–${a.end.toFixed(2)} · ${a.text}`));label.style.display='block';box.append(label)}$('alignApply').disabled=!result.proposals.length}
-$('alignRun').onclick=async()=>{if(!clips.length){alignStatus('Apri prima un progetto.');return}if(!['127.0.0.1','localhost'].includes(location.hostname)||location.port!=='8765'){alignStatus('Per elaborare i media apri la versione locale http://127.0.0.1:8765 (istruzioni README).');return}let files=[...$('alignAudio').files];if(!files.length){alignStatus('Seleziona almeno una clip audio.');return}let data=new FormData();let snapshot=JSON.stringify(clips);data.append('project',JSON.stringify({clips,fps:fps()}));data.append('mode',$('alignMode').value);data.append('model',$('alignModel').value);files.forEach(f=>data.append('audio',f));clips.forEach((_,i)=>{let f=$('ref_'+i)?.files[0];if(f)data.append('ref_'+i,f)});$('alignRun').disabled=true;$('alignApply').disabled=true;alignStatus('Analisi locale in corso; il primo uso può scaricare il modello Whisper.');try{let response=await fetch('/alignment/run',{method:'POST',body:data});let result=await response.json();if(!response.ok)throw Error(result.error||'Errore motore');if(JSON.stringify(clips)!==snapshot)throw Error('Progetto cambiato durante l’analisi: ripeti.');alignSnapshot=snapshot;showAlignment(result);alignStatus('Analisi completata. Verifica le proposte prima di applicarle.')}catch(e){alignStatus(e.message)}finally{$('alignRun').disabled=false}};
+let activeJob=null,uploadRequest=null;
+$('alignCancel').onclick=async()=>{
+  $('alignCancel').disabled=true;
+  alignStatus('Annullamento richiesto: attendo la fine della fase corrente.');
+  if(activeJob)await fetch('/alignment/job/'+activeJob+'/cancel',{method:'POST'}).catch(()=>{});
+};
+$('alignRun').onclick=async()=>{
+  if(!clips.length){alignStatus('Apri prima un progetto.');return}
+  if(!['127.0.0.1','localhost'].includes(location.hostname)||location.port!=='8765'){alignStatus('Apri la versione locale http://127.0.0.1:8765.');return}
+  let files=[...$('alignAudio').files];if(!files.length){alignStatus('Seleziona almeno una clip audio.');return}
+  let data=new FormData(),snapshot=JSON.stringify(clips);
+  data.append('project',JSON.stringify({clips,fps:fps()}));data.append('mode',$('alignMode').value);data.append('model',$('alignModel').value);data.append('device',$('alignDevice').value);
+  files.forEach(f=>data.append('audio',f));clips.forEach((_,i)=>{let f=$('ref_'+i)?.files[0];if(f)data.append('ref_'+i,f)});
+  $('alignRun').disabled=true;$('alignApply').disabled=true;$('alignProgress').hidden=false;$('alignLog').textContent='';$('alignBar').removeAttribute('value');
+  let timer,lastSeq=0,started=Date.now(),lastMessage='',uploading=true,polling=false;
+  const log=t=>{let box=$('alignLog');box.textContent=(box.textContent+t+'\n').split('\n').slice(-200).join('\n');box.scrollTop=box.scrollHeight};
+  const poll=async()=>{if(polling||!activeJob)return;polling=true;try{
+    let r=await fetch('/alignment/job/'+activeJob);if(!r.ok)return;let j=await r.json();
+    $('alignElapsed').textContent='Tempo trascorso: '+Math.floor(j.elapsed/60)+' min '+Math.floor(j.elapsed%60)+' s';
+    for(let e of j.events){if(e.seq<=lastSeq)continue;lastSeq=e.seq;
+      if(e.message!==lastMessage){log(e.message);lastMessage=e.message}
+      if(!uploading){let fraction=e.total>0&&e.done!=null?Math.min(1,e.done/e.total):null;
+        if(fraction===null)$('alignBar').removeAttribute('value');else{$('alignBar').max=1;$('alignBar').value=fraction}
+        alignStatus(e.message+(fraction===null?'':' · '+Math.round(fraction*100)+'% della fase'));
+      }
+    }
+  }catch(e){}finally{polling=false}};
+  try{
+    let r=await fetch('/alignment/job',{method:'POST'}),job=await r.json();if(!r.ok)throw Error(job.error||'Impossibile avviare analisi');
+    activeJob=job.job;$('alignCancel').disabled=false;timer=setInterval(poll,750);
+    alignStatus('Caricamento locale dei file');log('Caricamento locale dei file');
+    let result=await new Promise((resolve,reject)=>{
+      let x=new XMLHttpRequest();uploadRequest=x;x.open('POST','/alignment/run?job='+activeJob);
+      x.upload.onprogress=e=>{if(e.lengthComputable){$('alignBar').max=e.total;$('alignBar').value=e.loaded;alignStatus('Caricamento locale: '+Math.round(100*e.loaded/e.total)+'%')}};
+      x.upload.onload=()=>{uploading=false;$('alignBar').removeAttribute('value');alignStatus('File inviati; elaborazione server')};
+      x.onload=()=>{try{let v=JSON.parse(x.responseText);if(x.status>=400)reject(Error(v.error||'Errore server'));else resolve(v)}catch(e){reject(Error('Risposta server non valida'))}};
+      x.onerror=()=>reject(Error('Connessione al server interrotta'));x.onabort=()=>reject(Error('Caricamento annullato'));x.send(data);
+    });
+    await poll();
+    if(JSON.stringify(clips)!==snapshot)throw Error('Progetto cambiato durante l’analisi: ripeti.');
+    alignSnapshot=snapshot;showAlignment(result);$('alignBar').max=1;$('alignBar').value=1;alignStatus('Analisi completata. Verifica le proposte prima di applicarle.');log('Analisi completata');
+  }catch(e){alignStatus(e.message);log(e.message);$('alignBar').removeAttribute('value')}
+  finally{clearInterval(timer);activeJob=null;uploadRequest=null;$('alignRun').disabled=false;$('alignCancel').disabled=true;$('alignElapsed').textContent='Tempo trascorso: '+Math.round((Date.now()-started)/1000)+' s'}
+};
 $('alignApply').onclick=()=>{if(!alignResult||JSON.stringify(clips)!==alignSnapshot){alignStatus('Il progetto è cambiato: ripeti l’analisi.');return}let copy=structuredClone(clips),applied=0,skipped=0;let selected=[...$('alignReport').querySelectorAll('input:checked')].map(x=>alignResult.proposals[+x.dataset.proposal]);let seen=new Set();for(let p of selected.sort((a,b)=>b.score-a.score)){let key=p.clip+':'+p.cue,clip=copy[p.clip],x=clip?.cues[p.cue];if(seen.has(key)||!x||x.locked||x.anchor!=null||x.text!==p.text){skipped++;continue}let a=snap(p.start),b=snap(p.end);if(a<0||b<=a||b>clip.end||a<(clip.cues[p.cue-1]?.out??0)||b>(clip.cues[p.cue+1]?.in??clip.end)){skipped++;continue}x.in=a;x.out=b;seen.add(key);applied++}if(!applied){alignStatus('Nessuna proposta applicabile senza sovrapposizioni.');return}alignUndo=structuredClone(clips);clips=copy;render();$('alignUndo').disabled=false;$('alignApply').disabled=true;alignStatus(`${applied} applicate, ${skipped} scartate per conflitti/duplicati. Salva il progetto.`)};
 $('alignUndo').onclick=()=>{if(!alignUndo)return;clips=alignUndo;alignUndo=null;render();$('alignUndo').disabled=true;alignStatus('Allineamento annullato.')};
